@@ -55,17 +55,11 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float, mandib
     """
     Trouve la région du condyle pour un côté donné.
 
-    MÉTHODE: La mandibule a une forme en V.
-    Le CONDYLE est à l'extrémité du V = le sommet le plus ÉLOIGNÉ du centroïde.
-    La CORONOÏDE est plus proche du centre.
+    MÉTHODE: Trouver la symphyse (point le plus "avant") puis identifier
+    le condyle comme le sommet le plus éloigné de la symphyse.
 
-         Condyle G          Condyle D
-              \\              //
-               \\            //
-                \\    ●    //   ← Centroïde
-                 \\  /  \\//
-                  \\/    \\/
-                   Symphyse
+    La symphyse est au centre (X proche de x_center) et représente l'avant.
+    Le condyle est à l'opposé = le plus loin de la symphyse.
     """
     # Séparer par côté
     if side == "gauche":
@@ -78,17 +72,33 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float, mandib
     if len(side_vertices) < 100:
         return None
 
-    # Étape 1: Prendre la région supérieure (branche montante)
+    # Étape 1: Trouver la symphyse (point le plus central en X dans la partie basse)
+    # La symphyse est au centre de la mandibule, partie inférieure
+    z_low = np.percentile(vertices[:, 2], 30)
+    lower_region = vertices[vertices[:, 2] < z_low]
+
+    # Point le plus central (proche de x_center)
+    x_distances = np.abs(lower_region[:, 0] - x_center)
+    central_mask = x_distances < 20  # Points proches du centre
+    central_points = lower_region[central_mask]
+
+    if len(central_points) > 10:
+        # La symphyse est le point central le plus "avant" (Y extrême)
+        # On ne sait pas si Y+ ou Y- est avant, donc on prend l'extrême
+        symphysis_y = central_points[:, 1].mean()
+        symphysis = np.array([x_center, symphysis_y, central_points[:, 2].mean()])
+    else:
+        symphysis = mandible_centroid
+
+    print(f"  → Symphyse estimée: Y={symphysis[1]:.1f}")
+
+    # Étape 2: Prendre la région supérieure (branche montante)
     z_threshold = np.percentile(side_vertices[:, 2], 60)
     ramus_region = side_vertices[side_vertices[:, 2] > z_threshold]
 
     print(f"  → Branche montante: {len(ramus_region)} points")
 
-    # Étape 2: Pour chaque point haut, calculer sa distance au centroïde (en 2D: X,Y)
-    # Le condyle est le sommet le plus ÉLOIGNÉ du centroïde
-    centroid_2d = mandible_centroid[:2]  # Seulement X, Y
-
-    # Trouver les points les plus hauts (top 20%)
+    # Étape 3: Trouver les points les plus hauts (top 20%)
     z_high = np.percentile(ramus_region[:, 2], 80)
     top_region = ramus_region[ramus_region[:, 2] > z_high]
 
@@ -96,28 +106,29 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float, mandib
         z_high = np.percentile(ramus_region[:, 2], 70)
         top_region = ramus_region[ramus_region[:, 2] > z_high]
 
-    # Calculer la distance de chaque point au centroïde (en 2D)
-    distances_to_centroid = np.linalg.norm(top_region[:, :2] - centroid_2d, axis=1)
+    # Étape 4: Calculer la distance de chaque point haut à la symphyse (en Y seulement)
+    # Le condyle est le plus ÉLOIGNÉ de la symphyse en Y
+    y_distances = np.abs(top_region[:, 1] - symphysis[1])
 
-    # Trouver le point le plus éloigné du centroïde parmi les points hauts
-    farthest_idx = np.argmax(distances_to_centroid)
+    # Trouver le point le plus éloigné de la symphyse
+    farthest_idx = np.argmax(y_distances)
     farthest_point = top_region[farthest_idx]
-    max_dist = distances_to_centroid[farthest_idx]
+    max_dist_y = y_distances[farthest_idx]
 
-    # Trouver aussi le point le plus proche (probablement coronoïde)
-    nearest_idx = np.argmin(distances_to_centroid)
+    # Trouver le point le plus proche de la symphyse (coronoïde)
+    nearest_idx = np.argmin(y_distances)
     nearest_point = top_region[nearest_idx]
-    min_dist = distances_to_centroid[nearest_idx]
+    min_dist_y = y_distances[nearest_idx]
 
-    print(f"    Point le plus éloigné du centre: dist={max_dist:.1f}mm (CONDYLE)")
-    print(f"    Point le plus proche du centre: dist={min_dist:.1f}mm (coronoïde)")
+    print(f"    Point le plus éloigné de la symphyse: dist_Y={max_dist_y:.1f}mm → CONDYLE")
+    print(f"    Point le plus proche de la symphyse: dist_Y={min_dist_y:.1f}mm → coronoïde")
 
-    # Le condyle = région autour du point le plus éloigné
+    # Le condyle = région autour du point le plus éloigné de la symphyse
     condyle_center = farthest_point
 
-    print(f"  ✓ Condyle sélectionné: distance au centre={max_dist:.1f}mm")
+    print(f"  ✓ Condyle sélectionné: Y={condyle_center[1]:.1f}, Z={condyle_center[2]:.1f}")
 
-    # Étape 3: Extraire la région du condyle
+    # Étape 5: Extraire la région du condyle
     search_radius = 15.0
     distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
     condyle_points = side_vertices[distances < search_radius]
