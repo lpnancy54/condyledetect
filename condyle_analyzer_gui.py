@@ -30,7 +30,7 @@ import trimesh
 class CondyleDetector:
     """Classe pour la détection des condyles."""
 
-    def __init__(self, search_radius: float = 13.0):
+    def __init__(self, search_radius: float = 12.0):
         self.search_radius = search_radius
         self.symphysis_point = None  # Point de la symphyse (avant)
         self.mesh = None
@@ -106,6 +106,12 @@ class CondyleDetector:
             condyle_points = side_vertices[distances < self.search_radius]
         else:
             condyle_points = condyle_points_temp
+
+        # Étape 7: Filtrage vertical - ne garder que 8mm sous le sommet
+        if len(condyle_points) > 10:
+            z_max = condyle_points[:, 2].max()  # Sommet du condyle
+            z_min_allowed = z_max - 8.0  # Maximum 8mm sous le sommet
+            condyle_points = condyle_points[condyle_points[:, 2] >= z_min_allowed]
 
         return condyle_points
     
@@ -472,7 +478,7 @@ class MainWindow(QMainWindow):
         
         self.spin_radius = QDoubleSpinBox()
         self.spin_radius.setRange(5.0, 30.0)
-        self.spin_radius.setValue(13.0)
+        self.spin_radius.setValue(12.0)
         self.spin_radius.setSuffix(" mm")
         self.spin_radius.setToolTip("Rayon de recherche autour du point le plus haut")
         params_layout.addRow("Rayon de recherche:", self.spin_radius)
