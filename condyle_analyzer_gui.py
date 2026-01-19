@@ -46,29 +46,56 @@ class CondyleDetector:
             return False
     
     def find_condyle_region(self, vertices: np.ndarray, side: str, x_center: float) -> np.ndarray:
-        """Trouve la région du condyle pour un côté donné."""
+        """
+        Trouve la région du condyle pour un côté donné.
+
+        MÉTHODE: Trouver la symphyse (menton) puis identifier le condyle
+        comme le sommet le plus ÉLOIGNÉ de la symphyse en Y.
+        """
         if side == "gauche":
             side_mask = vertices[:, 0] < x_center
         else:
             side_mask = vertices[:, 0] >= x_center
-        
+
         side_vertices = vertices[side_mask]
-        
+
         if len(side_vertices) < 100:
             return None
-        
-        # Point le plus haut de ce côté
-        max_z_idx = np.argmax(side_vertices[:, 2])
-        highest_point = side_vertices[max_z_idx]
-        
-        # Sphère de recherche
-        distances = np.linalg.norm(side_vertices - highest_point, axis=1)
-        condyle_mask = distances < self.search_radius
-        condyle_points = side_vertices[condyle_mask]
-        
-        # Ne pas filtrer pour garder tout le volume du condyle
-        # Cela permet de calculer le vrai centre géométrique 3D
-        
+
+        # Étape 1: Trouver la symphyse (partie centrale basse = menton)
+        z_low = np.percentile(vertices[:, 2], 30)
+        lower_region = vertices[vertices[:, 2] < z_low]
+
+        x_distances = np.abs(lower_region[:, 0] - x_center)
+        central_mask = x_distances < 20
+        central_points = lower_region[central_mask]
+
+        if len(central_points) > 10:
+            symphysis_y = central_points[:, 1].mean()
+        else:
+            symphysis_y = vertices[:, 1].mean()
+
+        # Étape 2: Prendre la région supérieure (branche montante)
+        z_threshold = np.percentile(side_vertices[:, 2], 60)
+        ramus_region = side_vertices[side_vertices[:, 2] > z_threshold]
+
+        # Étape 3: Trouver les points les plus hauts
+        z_high = np.percentile(ramus_region[:, 2], 80)
+        top_region = ramus_region[ramus_region[:, 2] > z_high]
+
+        if len(top_region) < 10:
+            z_high = np.percentile(ramus_region[:, 2], 70)
+            top_region = ramus_region[ramus_region[:, 2] > z_high]
+
+        # Étape 4: Le condyle est le sommet le plus ÉLOIGNÉ de la symphyse en Y
+        y_distances = np.abs(top_region[:, 1] - symphysis_y)
+        farthest_idx = np.argmax(y_distances)
+        condyle_center = top_region[farthest_idx]
+
+        # Étape 5: Extraire la région du condyle
+        distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
+        condyle_points = side_vertices[distances < self.search_radius]
+
         return condyle_points
     
     def compute_geometric_center_3d(self, points: np.ndarray) -> np.ndarray:
