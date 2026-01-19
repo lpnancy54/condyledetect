@@ -90,22 +90,39 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
             'num_points': len(cluster_points)
         })
 
-    # Étape 4: Sélectionner le condyle = cluster le plus POSTÉRIEUR (Y le plus élevé)
-    # Le condyle est toujours plus postérieur que l'apophyse coronoïde
-    # On utilise Y comme critère principal, avec Z comme critère secondaire
+    # Étape 4: Sélectionner le condyle = cluster le plus POSTÉRIEUR ET HAUT
+    # Le condyle est caractérisé par: Y élevé (postérieur) ET Z élevé (haut)
+    # L'apophyse coronoïde est antérieure (Y plus bas) même si parfois haute en Z
 
-    # Trier par Y décroissant (plus postérieur = Y plus grand)
-    cluster_info.sort(key=lambda c: c['mean_y'], reverse=True)
+    # Normaliser Y et Z pour les rendre comparables
+    all_y = [c['mean_y'] for c in cluster_info]
+    all_z = [c['max_z'] for c in cluster_info]
 
-    # Le premier cluster (Y le plus élevé) devrait être le condyle
+    y_min, y_max = min(all_y), max(all_y)
+    z_min, z_max = min(all_z), max(all_z)
+
+    # Calculer un score combiné pour chaque cluster
+    # Le condyle = postérieur (Y élevé) + haut (Z élevé)
+    # Poids: Y est le critère PRINCIPAL car c'est ce qui distingue condyle de coronoïde
+    for c in cluster_info:
+        # Normaliser entre 0 et 1
+        y_norm = (c['mean_y'] - y_min) / (y_max - y_min + 0.001)
+        z_norm = (c['max_z'] - z_min) / (z_max - z_min + 0.001)
+        # Score: Y compte pour 70%, Z pour 30%
+        c['score'] = 0.7 * y_norm + 0.3 * z_norm
+
+    # Trier par score décroissant
+    cluster_info.sort(key=lambda c: c['score'], reverse=True)
+
+    # Le premier cluster (score le plus élevé) = condyle
     condyle_cluster = cluster_info[0]
 
-    # Vérification: si le cluster le plus postérieur est trop petit,
-    # c'est peut-être du bruit, prendre le suivant
+    # Vérification: si le cluster sélectionné est trop petit, prendre le suivant
     if condyle_cluster['num_points'] < 30 and len(cluster_info) > 1:
         condyle_cluster = cluster_info[1]
 
-    print(f"  → {len(cluster_info)} clusters détectés, condyle sélectionné: Y={condyle_cluster['mean_y']:.1f} (postérieur)")
+    print(f"  → {len(cluster_info)} clusters détectés")
+    print(f"    Condyle sélectionné: Y={condyle_cluster['mean_y']:.1f}, Z={condyle_cluster['max_z']:.1f}, score={condyle_cluster['score']:.2f}")
 
     # Étape 5: Étendre la région du condyle pour avoir plus de points
     condyle_center = condyle_cluster['centroid']
