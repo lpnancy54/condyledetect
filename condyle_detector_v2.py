@@ -55,9 +55,8 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     """
     Trouve la région du condyle pour un côté donné.
 
-    MÉTHODE: Le condyle est la structure la plus ARRONDIE parmi les pics.
-    - Condyle: forme ellipsoïdale, arrondie (ratio d'axes ~0.5-0.8)
-    - Coronoïde: forme pointue, allongée (ratio d'axes ~0.2-0.4)
+    MÉTHODE: Diviser la branche montante en régions antérieure/postérieure
+    et trouver le condyle dans la région POSTÉRIEURE (Y le plus élevé).
     """
     # Séparer par côté
     if side == "gauche":
@@ -70,85 +69,96 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     if len(side_vertices) < 100:
         return None
 
-    # Étape 1: Prendre la région supérieure (branche montante)
-    z_threshold = np.percentile(side_vertices[:, 2], 65)
-    upper_region = side_vertices[side_vertices[:, 2] > z_threshold]
+    # Étape 1: Prendre la région de la branche montante (40% supérieure en Z)
+    z_threshold = np.percentile(side_vertices[:, 2], 60)
+    ramus_region = side_vertices[side_vertices[:, 2] > z_threshold]
 
-    # Étape 2: Utiliser DBSCAN pour séparer les structures (condyle vs coronoïde)
-    clustering = DBSCAN(eps=4.0, min_samples=8).fit(upper_region)
-    labels = clustering.labels_
-    unique_labels = set(labels) - {-1}
+    print(f"  → Branche montante: {len(ramus_region)} points")
 
-    print(f"  → {len(unique_labels)} clusters détectés")
+    # Étape 2: Analyser la distribution en Y pour trouver les deux sommets
+    y_coords = ramus_region[:, 1]
+    y_min, y_max = y_coords.min(), y_coords.max()
+    y_range = y_max - y_min
 
-    if len(unique_labels) == 0:
-        # Fallback si pas de cluster
+    # Trouver le point le plus haut (Z max) pour chaque tiers en Y
+    n_sections = 5
+    y_sections = np.linspace(y_min, y_max, n_sections + 1)
+
+    section_peaks = []
+    for i in range(n_sections):
+        mask = (ramus_region[:, 1] >= y_sections[i]) & (ramus_region[:, 1] < y_sections[i + 1])
+        section_points = ramus_region[mask]
+        if len(section_points) > 10:
+            # Trouver le sommet de cette section
+            z_max_idx = np.argmax(section_points[:, 2])
+            peak_point = section_points[z_max_idx]
+            z_max = peak_point[2]
+            y_center = (y_sections[i] + y_sections[i + 1]) / 2
+
+            # Calculer la rondeur locale
+            top_mask = section_points[:, 2] > np.percentile(section_points[:, 2], 70)
+            top_points = section_points[top_mask]
+            roundness = compute_roundness(top_points) if len(top_points) > 10 else 0
+
+            section_peaks.append({
+                'y_center': y_center,
+                'z_max': z_max,
+                'peak_point': peak_point,
+                'num_points': len(section_points),
+                'roundness': roundness,
+                'section_idx': i
+            })
+
+    print(f"  → {len(section_peaks)} sections analysées")
+
+    if len(section_peaks) == 0:
+        # Fallback
         max_z_idx = np.argmax(side_vertices[:, 2])
         highest_point = side_vertices[max_z_idx]
         distances = np.linalg.norm(side_vertices - highest_point, axis=1)
         return side_vertices[distances < 15.0]
 
-    # Étape 3: Analyser chaque cluster
-    cluster_info = []
-    for label in unique_labels:
-        cluster_points = upper_region[labels == label]
+    # Étape 3: Trouver les deux pics principaux (coronoïde et condyle)
+    # Trier par Z décroissant pour trouver les sommets
+    section_peaks.sort(key=lambda s: s['z_max'], reverse=True)
 
-        if len(cluster_points) < 20:
-            continue
+    # Les deux sections les plus hautes sont probablement coronoïde et condyle
+    top_sections = section_peaks[:min(3, len(section_peaks))]
 
-        centroid = cluster_points.mean(axis=0)
-        max_z = cluster_points[:, 2].max()
+    for s in top_sections:
+        print(f"    Section Y={s['y_center']:.1f}: Z_max={s['z_max']:.1f}, rondeur={s['roundness']:.2f}")
 
-        # Calculer la rondeur du cluster
-        roundness = compute_roundness(cluster_points)
+    # Étape 4: Parmi les pics hauts, le CONDYLE est celui avec Y le plus GRAND (postérieur)
+    # ET/OU la meilleure rondeur
+    # Score: favoriser Y élevé (postérieur) et bonne rondeur
+    for s in top_sections:
+        y_score = (s['y_center'] - y_min) / (y_range + 0.001)  # 0 à 1, 1 = postérieur
+        s['score'] = 0.7 * y_score + 0.3 * s['roundness']
 
-        # Calculer les dimensions
-        bbox_min = cluster_points.min(axis=0)
-        bbox_max = cluster_points.max(axis=0)
-        width = bbox_max[0] - bbox_min[0]  # Largeur X
-        depth = bbox_max[1] - bbox_min[1]  # Profondeur Y
+    # Trier par score
+    top_sections.sort(key=lambda s: s['score'], reverse=True)
+    condyle_section = top_sections[0]
 
-        cluster_info.append({
-            'label': label,
-            'points': cluster_points,
-            'centroid': centroid,
-            'max_z': max_z,
-            'roundness': roundness,
-            'width': width,
-            'depth': depth,
-            'num_points': len(cluster_points)
-        })
+    print(f"  ✓ Condyle sélectionné: Y={condyle_section['y_center']:.1f} (score={condyle_section['score']:.2f})")
 
-    if len(cluster_info) == 0:
-        max_z_idx = np.argmax(side_vertices[:, 2])
-        highest_point = side_vertices[max_z_idx]
-        distances = np.linalg.norm(side_vertices - highest_point, axis=1)
-        return side_vertices[distances < 15.0]
+    # Étape 5: Extraire les points autour du pic du condyle
+    condyle_y = condyle_section['y_center']
+    y_tolerance = y_range / 4  # 25% de la plage
 
-    # Afficher les infos de debug
-    for i, c in enumerate(cluster_info):
-        print(f"    Cluster {i}: rondeur={c['roundness']:.2f}, largeur={c['width']:.1f}mm, "
-              f"Z_max={c['max_z']:.1f}, pts={c['num_points']}")
+    # Points dans la zone Y du condyle
+    y_mask = np.abs(ramus_region[:, 1] - condyle_y) < y_tolerance
+    condyle_region = ramus_region[y_mask]
 
-    # Étape 4: Sélectionner le condyle = cluster le plus ARRONDI ET LARGE
-    # Score combiné: rondeur + bonus pour la largeur
-    for c in cluster_info:
-        # Normaliser la largeur (condyle ~15-20mm, coronoïde ~5-10mm)
-        width_score = min(c['width'] / 15.0, 1.0)
-        # Score final: 60% rondeur + 40% largeur
-        c['score'] = 0.6 * c['roundness'] + 0.4 * width_score
+    # Prendre le sommet de cette région
+    if len(condyle_region) > 20:
+        z_thresh = np.percentile(condyle_region[:, 2], 60)
+        condyle_top = condyle_region[condyle_region[:, 2] > z_thresh]
+        condyle_center = condyle_top.mean(axis=0)
+    else:
+        condyle_center = condyle_section['peak_point']
 
-    # Trier par score décroissant
-    cluster_info.sort(key=lambda c: c['score'], reverse=True)
-
-    condyle_cluster = cluster_info[0]
-    print(f"  ✓ Condyle sélectionné: rondeur={condyle_cluster['roundness']:.2f}, "
-          f"largeur={condyle_cluster['width']:.1f}mm, score={condyle_cluster['score']:.2f}")
-
-    # Étape 5: Extraire la région finale du condyle
-    condyle_center = condyle_cluster['centroid']
+    # Étape 6: Extraire la région finale
     search_radius = 15.0
-
     distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
     condyle_points = side_vertices[distances < search_radius]
 
