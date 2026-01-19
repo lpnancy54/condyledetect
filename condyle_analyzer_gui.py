@@ -91,11 +91,21 @@ class CondyleDetector:
         # Étape 4: Le condyle est le sommet le plus ÉLOIGNÉ de la symphyse en Y
         y_distances = np.abs(top_region[:, 1] - symphysis_y)
         farthest_idx = np.argmax(y_distances)
-        condyle_center = top_region[farthest_idx]
+        condyle_initial = top_region[farthest_idx]
 
-        # Étape 5: Extraire la région du condyle
-        distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
-        condyle_points = side_vertices[distances < self.search_radius]
+        # Étape 5: Première extraction pour trouver le vrai centre
+        distances = np.linalg.norm(side_vertices - condyle_initial, axis=1)
+        condyle_points_temp = side_vertices[distances < self.search_radius]
+
+        # Étape 6: Recentrer sur le centroïde des points extraits
+        if len(condyle_points_temp) > 20:
+            # Calculer le vrai centre (bounding box center)
+            bbox_center = (condyle_points_temp.min(axis=0) + condyle_points_temp.max(axis=0)) / 2
+            # Re-extraire avec le vrai centre pour avoir le condyle complet
+            distances = np.linalg.norm(side_vertices - bbox_center, axis=1)
+            condyle_points = side_vertices[distances < self.search_radius]
+        else:
+            condyle_points = condyle_points_temp
 
         return condyle_points
     
