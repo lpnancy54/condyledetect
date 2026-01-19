@@ -51,12 +51,21 @@ def compute_roundness(points: np.ndarray) -> float:
     return roundness
 
 
-def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.ndarray:
+def find_condyle_region(vertices: np.ndarray, side: str, x_center: float, mandible_centroid: np.ndarray) -> np.ndarray:
     """
     Trouve la région du condyle pour un côté donné.
 
-    MÉTHODE: Diviser la branche montante en régions antérieure/postérieure
-    et trouver le condyle dans la région POSTÉRIEURE (Y le plus élevé).
+    MÉTHODE: La mandibule a une forme en V.
+    Le CONDYLE est à l'extrémité du V = le sommet le plus ÉLOIGNÉ du centroïde.
+    La CORONOÏDE est plus proche du centre.
+
+         Condyle G          Condyle D
+              \\              //
+               \\            //
+                \\    ●    //   ← Centroïde
+                 \\  /  \\//
+                  \\/    \\/
+                   Symphyse
     """
     # Séparer par côté
     if side == "gauche":
@@ -69,95 +78,46 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     if len(side_vertices) < 100:
         return None
 
-    # Étape 1: Prendre la région de la branche montante (40% supérieure en Z)
+    # Étape 1: Prendre la région supérieure (branche montante)
     z_threshold = np.percentile(side_vertices[:, 2], 60)
     ramus_region = side_vertices[side_vertices[:, 2] > z_threshold]
 
     print(f"  → Branche montante: {len(ramus_region)} points")
 
-    # Étape 2: Analyser la distribution en Y pour trouver les deux sommets
-    y_coords = ramus_region[:, 1]
-    y_min, y_max = y_coords.min(), y_coords.max()
-    y_range = y_max - y_min
+    # Étape 2: Pour chaque point haut, calculer sa distance au centroïde (en 2D: X,Y)
+    # Le condyle est le sommet le plus ÉLOIGNÉ du centroïde
+    centroid_2d = mandible_centroid[:2]  # Seulement X, Y
 
-    # Trouver le point le plus haut (Z max) pour chaque tiers en Y
-    n_sections = 5
-    y_sections = np.linspace(y_min, y_max, n_sections + 1)
+    # Trouver les points les plus hauts (top 20%)
+    z_high = np.percentile(ramus_region[:, 2], 80)
+    top_region = ramus_region[ramus_region[:, 2] > z_high]
 
-    section_peaks = []
-    for i in range(n_sections):
-        mask = (ramus_region[:, 1] >= y_sections[i]) & (ramus_region[:, 1] < y_sections[i + 1])
-        section_points = ramus_region[mask]
-        if len(section_points) > 10:
-            # Trouver le sommet de cette section
-            z_max_idx = np.argmax(section_points[:, 2])
-            peak_point = section_points[z_max_idx]
-            z_max = peak_point[2]
-            y_center = (y_sections[i] + y_sections[i + 1]) / 2
+    if len(top_region) < 10:
+        z_high = np.percentile(ramus_region[:, 2], 70)
+        top_region = ramus_region[ramus_region[:, 2] > z_high]
 
-            # Calculer la rondeur locale
-            top_mask = section_points[:, 2] > np.percentile(section_points[:, 2], 70)
-            top_points = section_points[top_mask]
-            roundness = compute_roundness(top_points) if len(top_points) > 10 else 0
+    # Calculer la distance de chaque point au centroïde (en 2D)
+    distances_to_centroid = np.linalg.norm(top_region[:, :2] - centroid_2d, axis=1)
 
-            section_peaks.append({
-                'y_center': y_center,
-                'z_max': z_max,
-                'peak_point': peak_point,
-                'num_points': len(section_points),
-                'roundness': roundness,
-                'section_idx': i
-            })
+    # Trouver le point le plus éloigné du centroïde parmi les points hauts
+    farthest_idx = np.argmax(distances_to_centroid)
+    farthest_point = top_region[farthest_idx]
+    max_dist = distances_to_centroid[farthest_idx]
 
-    print(f"  → {len(section_peaks)} sections analysées")
+    # Trouver aussi le point le plus proche (probablement coronoïde)
+    nearest_idx = np.argmin(distances_to_centroid)
+    nearest_point = top_region[nearest_idx]
+    min_dist = distances_to_centroid[nearest_idx]
 
-    if len(section_peaks) == 0:
-        # Fallback
-        max_z_idx = np.argmax(side_vertices[:, 2])
-        highest_point = side_vertices[max_z_idx]
-        distances = np.linalg.norm(side_vertices - highest_point, axis=1)
-        return side_vertices[distances < 15.0]
+    print(f"    Point le plus éloigné du centre: dist={max_dist:.1f}mm (CONDYLE)")
+    print(f"    Point le plus proche du centre: dist={min_dist:.1f}mm (coronoïde)")
 
-    # Étape 3: Trouver les deux pics principaux (coronoïde et condyle)
-    # Trier par Z décroissant pour trouver les sommets
-    section_peaks.sort(key=lambda s: s['z_max'], reverse=True)
+    # Le condyle = région autour du point le plus éloigné
+    condyle_center = farthest_point
 
-    # Les deux sections les plus hautes sont probablement coronoïde et condyle
-    top_sections = section_peaks[:min(3, len(section_peaks))]
+    print(f"  ✓ Condyle sélectionné: distance au centre={max_dist:.1f}mm")
 
-    for s in top_sections:
-        print(f"    Section Y={s['y_center']:.1f}: Z_max={s['z_max']:.1f}, rondeur={s['roundness']:.2f}")
-
-    # Étape 4: Parmi les pics hauts, le CONDYLE est celui avec Y le plus GRAND (postérieur)
-    # ET/OU la meilleure rondeur
-    # Score: favoriser Y élevé (postérieur) et bonne rondeur
-    for s in top_sections:
-        y_score = (s['y_center'] - y_min) / (y_range + 0.001)  # 0 à 1, 1 = postérieur
-        s['score'] = 0.7 * y_score + 0.3 * s['roundness']
-
-    # Trier par score
-    top_sections.sort(key=lambda s: s['score'], reverse=True)
-    condyle_section = top_sections[0]
-
-    print(f"  ✓ Condyle sélectionné: Y={condyle_section['y_center']:.1f} (score={condyle_section['score']:.2f})")
-
-    # Étape 5: Extraire les points autour du pic du condyle
-    condyle_y = condyle_section['y_center']
-    y_tolerance = y_range / 4  # 25% de la plage
-
-    # Points dans la zone Y du condyle
-    y_mask = np.abs(ramus_region[:, 1] - condyle_y) < y_tolerance
-    condyle_region = ramus_region[y_mask]
-
-    # Prendre le sommet de cette région
-    if len(condyle_region) > 20:
-        z_thresh = np.percentile(condyle_region[:, 2], 60)
-        condyle_top = condyle_region[condyle_region[:, 2] > z_thresh]
-        condyle_center = condyle_top.mean(axis=0)
-    else:
-        condyle_center = condyle_section['peak_point']
-
-    # Étape 6: Extraire la région finale
+    # Étape 3: Extraire la région du condyle
     search_radius = 15.0
     distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
     condyle_points = side_vertices[distances < search_radius]
@@ -198,16 +158,19 @@ def detect_condyles_precise(mesh: trimesh.Trimesh) -> dict:
     print(f"\n=== Analyse de l'orientation ===")
     print(f"Dimensions: {bounds[1] - bounds[0]}")
     
-    # Centre du maillage
+    # Centre du maillage (centroïde global)
     x_center = mesh.centroid[0]
-    
+    mandible_centroid = mesh.centroid  # Centroïde 3D complet
+
+    print(f"Centroïde de la mandibule: {mandible_centroid}")
+
     condyles = {}
-    
+
     for side in ["gauche", "droit"]:
         print(f"\n--- Analyse condyle {side} ---")
-        
-        # Trouver la région du condyle
-        condyle_points = find_condyle_region(vertices, side, x_center)
+
+        # Trouver la région du condyle (basé sur la distance au centroïde)
+        condyle_points = find_condyle_region(vertices, side, x_center, mandible_centroid)
         
         if condyle_points is None or len(condyle_points) < 20:
             print(f"⚠ Impossible de détecter le condyle {side}")
