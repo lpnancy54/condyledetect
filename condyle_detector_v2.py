@@ -29,14 +29,9 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     """
     Trouve la région du condyle pour un côté donné.
 
-    La tête condylienne est caractérisée par:
-    - Position supérieure (Z élevé)
-    - Position postérieure (Y élevé dans la plupart des orientations)
-    - Forme convexe arrondie
-
-    IMPORTANT: Cette fonction distingue le condyle de l'apophyse coronoïde
-    en utilisant la position postérieure (Y) comme critère principal.
-    Le condyle est TOUJOURS plus postérieur que l'apophyse coronoïde.
+    MÉTHODE: Analyse du profil de hauteur selon l'axe Y (antéro-postérieur)
+    pour détecter les pics (coronoïde et condyle), puis sélectionner
+    le pic le plus POSTÉRIEUR qui correspond au condyle.
     """
     # Séparer par côté
     if side == "gauche":
@@ -49,106 +44,97 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     if len(side_vertices) < 100:
         return None
 
-    # Étape 1: Identifier la région supérieure de la branche montante
-    # Prendre les points dans le quartile supérieur en Z
-    z_threshold_high = np.percentile(side_vertices[:, 2], 75)
-    upper_region = side_vertices[side_vertices[:, 2] > z_threshold_high]
+    # Étape 1: Prendre la région supérieure (branche montante)
+    z_threshold = np.percentile(side_vertices[:, 2], 60)
+    upper_region = side_vertices[side_vertices[:, 2] > z_threshold]
 
-    if len(upper_region) < 50:
-        # Fallback: prendre les 20% supérieurs
-        z_threshold_high = np.percentile(side_vertices[:, 2], 80)
-        upper_region = side_vertices[side_vertices[:, 2] > z_threshold_high]
+    # Étape 2: Créer un profil de hauteur maximale selon Y
+    # Diviser en tranches selon Y et trouver Z max pour chaque tranche
+    y_min, y_max = upper_region[:, 1].min(), upper_region[:, 1].max()
+    n_bins = 50
+    y_bins = np.linspace(y_min, y_max, n_bins + 1)
+    y_centers = (y_bins[:-1] + y_bins[1:]) / 2
 
-    # Étape 2: Utiliser DBSCAN pour identifier les clusters (condyle vs coronoïde)
-    # Ces deux structures sont séparées par l'échancrure sigmoïde
-    clustering = DBSCAN(eps=5.0, min_samples=10).fit(upper_region)
-    labels = clustering.labels_
-    unique_labels = set(labels) - {-1}  # Exclure le bruit
+    z_profile = np.zeros(n_bins)
+    for i in range(n_bins):
+        mask = (upper_region[:, 1] >= y_bins[i]) & (upper_region[:, 1] < y_bins[i + 1])
+        if mask.any():
+            z_profile[i] = upper_region[mask, 2].max()
 
-    if len(unique_labels) == 0:
-        # Pas de cluster trouvé, utiliser l'ancienne méthode avec correction Y
+    # Lisser le profil pour réduire le bruit
+    z_profile_smooth = gaussian_filter1d(z_profile, sigma=2)
+
+    # Étape 3: Trouver les pics (maxima locaux) dans le profil
+    # Un pic est un point plus haut que ses voisins
+    peaks = []
+    for i in range(2, n_bins - 2):
+        if (z_profile_smooth[i] > z_profile_smooth[i-1] and
+            z_profile_smooth[i] > z_profile_smooth[i+1] and
+            z_profile_smooth[i] > z_profile_smooth[i-2] and
+            z_profile_smooth[i] > z_profile_smooth[i+2]):
+            peaks.append({
+                'y': y_centers[i],
+                'z': z_profile_smooth[i],
+                'idx': i
+            })
+
+    print(f"  → {len(peaks)} pics détectés dans le profil de hauteur")
+
+    if len(peaks) == 0:
+        # Fallback: prendre le point le plus haut
         max_z_idx = np.argmax(side_vertices[:, 2])
         highest_point = side_vertices[max_z_idx]
         search_radius = 15.0
         distances = np.linalg.norm(side_vertices - highest_point, axis=1)
-        condyle_points = side_vertices[distances < search_radius]
-        return condyle_points
+        return side_vertices[distances < search_radius]
 
-    # Étape 3: Pour chaque cluster, calculer les caractéristiques géométriques
-    # CRITÈRE CLÉ: Le condyle est BEAUCOUP PLUS LARGE que l'apophyse coronoïde
-    # - Condyle: structure large, arrondie, ellipsoïdale (~15-20mm de large)
-    # - Coronoïde: structure étroite, pointue (~5-10mm de large)
-    cluster_info = []
-    for label in unique_labels:
-        cluster_points = upper_region[labels == label]
-        centroid = cluster_points.mean(axis=0)
-        max_z = cluster_points[:, 2].max()
-        mean_y = centroid[1]
+    # Étape 4: Parmi les pics significatifs, prendre le plus POSTÉRIEUR (Y max)
+    # Le condyle est TOUJOURS plus postérieur que l'apophyse coronoïde
 
-        # Calculer les dimensions du cluster (bounding box)
-        bbox_min = cluster_points.min(axis=0)
-        bbox_max = cluster_points.max(axis=0)
-        dimensions = bbox_max - bbox_min
+    # Filtrer les pics trop bas (garder les pics au-dessus de 80% du max)
+    max_peak_z = max(p['z'] for p in peaks)
+    significant_peaks = [p for p in peaks if p['z'] > 0.8 * max_peak_z]
 
-        # Largeur médio-latérale (X) - CRITÈRE PRINCIPAL
-        width_x = dimensions[0]
-        # Profondeur antéro-postérieure (Y)
-        depth_y = dimensions[1]
-        # Hauteur (Z)
-        height_z = dimensions[2]
+    if len(significant_peaks) == 0:
+        significant_peaks = peaks
 
-        # Le condyle est plus large ET plus profond que la coronoïde
-        # Surface horizontale approximative
-        horizontal_area = width_x * depth_y
+    # Trier par Y décroissant (le plus postérieur en premier)
+    significant_peaks.sort(key=lambda p: p['y'], reverse=True)
 
-        cluster_info.append({
-            'label': label,
-            'points': cluster_points,
-            'centroid': centroid,
-            'max_z': max_z,
-            'mean_y': mean_y,
-            'width_x': width_x,
-            'depth_y': depth_y,
-            'height_z': height_z,
-            'horizontal_area': horizontal_area,
-            'num_points': len(cluster_points)
-        })
+    # Le condyle = pic le plus postérieur
+    condyle_peak = significant_peaks[0]
 
-    # Étape 4: Sélectionner le condyle = cluster le plus LARGE
-    # Le condyle a une surface horizontale beaucoup plus grande que la coronoïde
+    print(f"    Pics significatifs: {[(f'Y={p[\"y\"]:.1f}, Z={p[\"z\"]:.1f}') for p in significant_peaks]}")
+    print(f"  ✓ Condyle sélectionné: Y={condyle_peak['y']:.1f} (le plus postérieur)")
 
-    # Afficher les infos de debug pour tous les clusters
-    print(f"  → {len(cluster_info)} clusters détectés:")
-    for i, c in enumerate(cluster_info):
-        print(f"    Cluster {i}: largeur={c['width_x']:.1f}mm, profondeur={c['depth_y']:.1f}mm, "
-              f"surface={c['horizontal_area']:.1f}mm², Y={c['mean_y']:.1f}")
+    # Étape 5: Extraire les points autour du pic du condyle
+    # Trouver les points proches de ce Y et avec Z élevé
+    y_tolerance = (y_max - y_min) / 10  # 10% de la plage Y
+    condyle_y = condyle_peak['y']
 
-    # Trier par surface horizontale décroissante (le plus large = condyle)
-    cluster_info.sort(key=lambda c: c['horizontal_area'], reverse=True)
+    # Masque: points proches en Y et dans la partie haute
+    y_mask = np.abs(upper_region[:, 1] - condyle_y) < y_tolerance
+    candidate_points = upper_region[y_mask]
 
-    # Le premier cluster (le plus large) = condyle
-    condyle_cluster = cluster_info[0]
+    if len(candidate_points) < 20:
+        # Élargir la recherche
+        y_mask = np.abs(upper_region[:, 1] - condyle_y) < y_tolerance * 2
+        candidate_points = upper_region[y_mask]
 
-    # Vérification: le condyle doit avoir une largeur minimale (~10mm)
-    if condyle_cluster['width_x'] < 8.0 and len(cluster_info) > 1:
-        # Si trop étroit, c'est peut-être du bruit
-        condyle_cluster = cluster_info[1]
+    # Trouver le centroïde des points les plus hauts
+    z_thresh = np.percentile(candidate_points[:, 2], 70)
+    high_points = candidate_points[candidate_points[:, 2] > z_thresh]
+    condyle_center = high_points.mean(axis=0)
 
-    print(f"  ✓ Condyle sélectionné: largeur={condyle_cluster['width_x']:.1f}mm, "
-          f"surface={condyle_cluster['horizontal_area']:.1f}mm²")
-
-    # Étape 5: Étendre la région du condyle pour avoir plus de points
-    condyle_center = condyle_cluster['centroid']
-    search_radius = 15.0  # mm
-
+    # Étape 6: Extraire la région finale du condyle
+    search_radius = 15.0
     distances = np.linalg.norm(side_vertices - condyle_center, axis=1)
     condyle_points = side_vertices[distances < search_radius]
 
-    # Étape 6: Affiner - garder les points supérieurs
+    # Affiner - garder les points supérieurs
     if len(condyle_points) > 50:
         z_threshold = np.percentile(condyle_points[:, 2], 40)
-        refined_mask = condyle_points[:, 2] > z_threshold
-        condyle_points = condyle_points[refined_mask]
+        condyle_points = condyle_points[condyle_points[:, 2] > z_threshold]
 
     return condyle_points
 
