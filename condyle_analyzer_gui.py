@@ -29,9 +29,10 @@ import trimesh
 
 class CondyleDetector:
     """Classe pour la détection des condyles."""
-    
-    def __init__(self, search_radius: float = 15.0):
+
+    def __init__(self, search_radius: float = 13.0):
         self.search_radius = search_radius
+        self.symphysis_point = None  # Point de la symphyse (avant)
         self.mesh = None
         self.condyles = {}
         self.measurements = {}
@@ -114,10 +115,22 @@ class CondyleDetector:
         """Détecte les condyles."""
         if self.mesh is None:
             return False
-        
+
         vertices = self.mesh.vertices
         x_center = self.mesh.centroid[0]
-        
+
+        # Calculer et stocker le point de la symphyse (AVANT de la mandibule)
+        z_low = np.percentile(vertices[:, 2], 30)
+        lower_region = vertices[vertices[:, 2] < z_low]
+        x_distances = np.abs(lower_region[:, 0] - x_center)
+        central_mask = x_distances < 20
+        central_points = lower_region[central_mask]
+
+        if len(central_points) > 10:
+            self.symphysis_point = central_points.mean(axis=0)
+        else:
+            self.symphysis_point = np.array([x_center, vertices[:, 1].mean(), vertices[:, 2].min()])
+
         self.condyles = {}
         
         for side in ["gauche", "droit"]:
@@ -242,19 +255,47 @@ class MeshViewer(gl.GLViewWidget):
         
         return center
     
-    def show_condyles(self, condyles: dict, center: np.ndarray, measurements: dict):
-        """Affiche les marqueurs des condyles en mode filaire avec centres et point milieu."""
+    def show_condyles(self, condyles: dict, center: np.ndarray, measurements: dict, symphysis_point: np.ndarray = None):
+        """Affiche les marqueurs des condyles et la symphyse (avant/arrière)."""
         # Supprimer les anciens marqueurs
         for item in self.condyle_items:
             self.removeItem(item)
         self.condyle_items = []
-        
+
+        # Afficher la SYMPHYSE (AVANT de la mandibule) en CYAN
+        if symphysis_point is not None:
+            symphysis = symphysis_point - center
+            sphere_sym = gl.MeshData.sphere(rows=10, cols=10, radius=2.5)
+            sym_item = gl.GLMeshItem(
+                meshdata=sphere_sym,
+                smooth=True,
+                color=(0.0, 1.0, 1.0, 1.0),  # Cyan = AVANT
+                shader='shaded',
+                glOptions='opaque'
+            )
+            sym_item.translate(*symphysis)
+            self.addItem(sym_item)
+            self.condyle_items.append(sym_item)
+
+            # Ligne verticale au-dessus de la symphyse pour indiquer "AVANT"
+            line_start = symphysis + np.array([0, 0, 0])
+            line_end = symphysis + np.array([0, 0, 15])
+            line_pts = np.array([line_start, line_end])
+            line_av = gl.GLLinePlotItem(
+                pos=line_pts,
+                color=(0.0, 1.0, 1.0, 0.8),
+                width=3.0,
+                antialias=True
+            )
+            self.addItem(line_av)
+            self.condyle_items.append(line_av)
+
         # Couleurs: Vert pour gauche, Rouge pour droit
         colors = {
             "gauche": (0.2, 0.8, 0.2, 0.6),  # Vert semi-transparent
             "droit": (1.0, 0.2, 0.2, 0.6)    # Rouge semi-transparent
         }
-        
+
         center_colors = {
             "gauche": (0.0, 1.0, 0.0, 1.0),  # Vert vif pour le centre
             "droit": (1.0, 0.0, 0.0, 1.0)    # Rouge vif pour le centre
@@ -421,7 +462,7 @@ class MainWindow(QMainWindow):
         
         self.spin_radius = QDoubleSpinBox()
         self.spin_radius.setRange(5.0, 30.0)
-        self.spin_radius.setValue(15.0)
+        self.spin_radius.setValue(13.0)
         self.spin_radius.setSuffix(" mm")
         self.spin_radius.setToolTip("Rayon de recherche autour du point le plus haut")
         params_layout.addRow("Rayon de recherche:", self.spin_radius)
@@ -595,7 +636,7 @@ class MainWindow(QMainWindow):
         # Détecter les condyles
         if self.detector.detect():
             self._display_results()
-            self.viewer.show_condyles(self.detector.condyles, self.mesh_center, self.detector.measurements)
+            self.viewer.show_condyles(self.detector.condyles, self.mesh_center, self.detector.measurements, self.detector.symphysis_point)
             self.btn_export_json.setEnabled(True)
             self.btn_export_stl.setEnabled(True)
             self.statusbar.showMessage("Analyse terminée - Condyles détectés")
