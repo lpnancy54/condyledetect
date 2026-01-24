@@ -66,8 +66,33 @@ class CondyleDetector:
         condyle_mask = distances < self.search_radius
         condyle_points = side_vertices[condyle_mask]
         
-        # Ne pas filtrer pour garder tout le volume du condyle
-        # Cela permet de calculer le vrai centre géométrique 3D
+        # Affiner en favorisant les zones supérieures et postérieures
+        # (plus haut et surtout plus en arrière que l'apophyse coronoïde).
+        if len(condyle_points) > 50:
+            threshold_pairs = [(50, 60), (45, 55), (40, 50)]
+            min_points = 20
+
+            refined_points = None
+
+            for z_pct, y_pct in threshold_pairs:
+                z_threshold = np.percentile(condyle_points[:, 2], z_pct)
+                y_threshold = np.percentile(condyle_points[:, 1], y_pct)
+
+                refined_mask = (condyle_points[:, 2] > z_threshold) & (condyle_points[:, 1] > y_threshold)
+                candidate = condyle_points[refined_mask]
+
+                if len(candidate) >= min_points:
+                    refined_points = candidate
+                    break
+
+            if refined_points is not None:
+                condyle_points = refined_points
+            else:
+                z_threshold = np.percentile(condyle_points[:, 2], 40)
+                z_only_mask = condyle_points[:, 2] > z_threshold
+                z_only_points = condyle_points[z_only_mask]
+                if len(z_only_points) >= min_points:
+                    condyle_points = z_only_points
         
         return condyle_points
     

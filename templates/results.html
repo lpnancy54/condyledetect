@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Résultats - CondyleDetect</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <h1>Résultats de l’analyse</h1>
+        <p>Analyse ID : {{ analysis_id }}</p>
+      </header>
+
+      <section class="card">
+        <h2>Exports</h2>
+        <div class="actions">
+          <a class="btn-secondary" href="{{ url_for('download', filename=json_file) }}">Télécharger JSON</a>
+          {% if stl_file %}
+          <a class="btn-secondary" href="{{ url_for('download', filename=stl_file) }}">Télécharger STL marqué</a>
+          {% endif %}
+          <a class="btn-secondary" href="{{ url_for('index') }}">Nouvelle analyse</a>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Condyles détectés</h2>
+        <div class="grid">
+          {% for side, data in payload.condyles.items() %}
+          <div class="panel">
+            <h3>{{ side | capitalize }}</h3>
+            <ul>
+              <li>Centre: {{ data.centroid }}</li>
+              <li>Apex: {{ data.apex }}</li>
+              <li>Pôle médial: {{ data.medial_pole }}</li>
+              <li>Pôle latéral: {{ data.lateral_pole }}</li>
+              <li>Largeur: {{ data.condyle_width }} mm</li>
+              <li>Points: {{ data.num_points }}</li>
+            </ul>
+          </div>
+          {% else %}
+          <p>Aucun condyle détecté.</p>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Mesures intercondyliennes</h2>
+        <ul>
+          {% for key, value in payload.measurements.items() %}
+          <li><strong>{{ key }}:</strong> {{ value }}</li>
+          {% else %}
+          <li>Aucune mesure disponible.</li>
+          {% endfor %}
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

@@ -15,6 +15,7 @@ from scipy.spatial import ConvexHull
 from sklearn.cluster import DBSCAN
 from scipy.ndimage import gaussian_filter1d
 from pathlib import Path
+from typing import List, Optional, Sequence, Tuple
 import json
 
 
@@ -25,10 +26,17 @@ def load_mandible(filepath: str) -> trimesh.Trimesh:
     return mesh
 
 
-def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.ndarray:
+def find_condyle_region(
+    vertices: np.ndarray,
+    side: str,
+    x_center: float,
+    search_radius: float = 15.0,
+    threshold_pairs: Optional[Sequence[Tuple[float, float]]] = None,
+    min_points: int = 20,
+) -> np.ndarray:
     """
     Trouve la région du condyle pour un côté donné.
-    
+
     La tête condylienne est caractérisée par:
     - Position supérieure (Z élevé)
     - Position postérieure (Y élevé dans la plupart des orientations)
@@ -51,21 +59,38 @@ def find_condyle_region(vertices: np.ndarray, side: str, x_center: float) -> np.
     
     # Étape 2: Définir une sphère de recherche autour du point le plus haut
     # Le condyle fait environ 15-20mm de diamètre
-    search_radius = 15.0  # mm
-    
     distances = np.linalg.norm(side_vertices - highest_point, axis=1)
     condyle_mask = distances < search_radius
     condyle_points = side_vertices[condyle_mask]
     
-    # Étape 3: Affiner en utilisant la courbure locale
-    # Les points du condyle ont une courbure convexe caractéristique
-    # Pour simplifier, on prend les points dans la région supérieure de cette sphère
-    
+    # Étape 3: Affiner en favorisant les zones supérieures et postérieures
+    # Les points du condyle doivent être plus hauts et plus postérieurs
+    # que l'apophyse coronoïde.
     if len(condyle_points) > 50:
-        # Garder les 60% supérieurs en Z
-        z_threshold = np.percentile(condyle_points[:, 2], 40)
-        refined_mask = condyle_points[:, 2] > z_threshold
-        condyle_points = condyle_points[refined_mask]
+        if threshold_pairs is None:
+            threshold_pairs = [(50, 60), (45, 55), (40, 50)]
+
+        refined_points = None
+
+        for z_pct, y_pct in threshold_pairs:
+            z_threshold = np.percentile(condyle_points[:, 2], z_pct)
+            y_threshold = np.percentile(condyle_points[:, 1], y_pct)
+
+            refined_mask = (condyle_points[:, 2] > z_threshold) & (condyle_points[:, 1] > y_threshold)
+            candidate = condyle_points[refined_mask]
+
+            if len(candidate) >= min_points:
+                refined_points = candidate
+                break
+
+        if refined_points is not None:
+            condyle_points = refined_points
+        else:
+            z_threshold = np.percentile(condyle_points[:, 2], 40)
+            z_only_mask = condyle_points[:, 2] > z_threshold
+            z_only_points = condyle_points[z_only_mask]
+            if len(z_only_points) >= min_points:
+                condyle_points = z_only_points
     
     return condyle_points
 
