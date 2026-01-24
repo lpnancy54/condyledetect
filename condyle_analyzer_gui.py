@@ -57,28 +57,37 @@ class CondyleDetector:
         if len(side_vertices) < 100:
             return None
         
-        # Point le plus haut de ce côté
-        max_z_idx = np.argmax(side_vertices[:, 2])
-        highest_point = side_vertices[max_z_idx]
+        # Point de départ surtout postérieur pour éviter l'apophyse coronoïde
+        y_threshold_seed = np.percentile(side_vertices[:, 1], 92)
+        z_floor_seed = np.percentile(side_vertices[:, 2], 40)
+        posterior_mask = (side_vertices[:, 1] >= y_threshold_seed) & (side_vertices[:, 2] >= z_floor_seed)
+        posterior_points = side_vertices[posterior_mask]
+        if len(posterior_points) == 0:
+            posterior_mask = side_vertices[:, 1] >= np.percentile(side_vertices[:, 1], 90)
+            posterior_points = side_vertices[posterior_mask]
+        if len(posterior_points) == 0:
+            return None
+        seed_idx = np.argmax(posterior_points[:, 2])
+        seed_point = posterior_points[seed_idx]
         
         # Sphère de recherche
-        distances = np.linalg.norm(side_vertices - highest_point, axis=1)
+        distances = np.linalg.norm(side_vertices - seed_point, axis=1)
         condyle_mask = distances < self.search_radius
         condyle_points = side_vertices[condyle_mask]
         
-        # Affiner en favorisant les zones supérieures et postérieures
-        # (plus haut et surtout plus en arrière que l'apophyse coronoïde).
+        # Affiner en privilégiant l'extrémité postérieure,
+        # avec un plancher supérieur modéré.
         if len(condyle_points) > 50:
-            threshold_pairs = [(50, 60), (45, 55), (40, 50)]
+            threshold_pairs = [(70, 40), (65, 35), (60, 30)]
             min_points = 20
 
             refined_points = None
 
-            for z_pct, y_pct in threshold_pairs:
-                z_threshold = np.percentile(condyle_points[:, 2], z_pct)
+            for y_pct, z_pct in threshold_pairs:
                 y_threshold = np.percentile(condyle_points[:, 1], y_pct)
+                z_threshold = np.percentile(condyle_points[:, 2], z_pct)
 
-                refined_mask = (condyle_points[:, 2] > z_threshold) & (condyle_points[:, 1] > y_threshold)
+                refined_mask = (condyle_points[:, 1] >= y_threshold) & (condyle_points[:, 2] >= z_threshold)
                 candidate = condyle_points[refined_mask]
 
                 if len(candidate) >= min_points:
@@ -88,11 +97,11 @@ class CondyleDetector:
             if refined_points is not None:
                 condyle_points = refined_points
             else:
-                z_threshold = np.percentile(condyle_points[:, 2], 40)
-                z_only_mask = condyle_points[:, 2] > z_threshold
-                z_only_points = condyle_points[z_only_mask]
-                if len(z_only_points) >= min_points:
-                    condyle_points = z_only_points
+                y_threshold = np.percentile(condyle_points[:, 1], 65)
+                y_only_mask = condyle_points[:, 1] >= y_threshold
+                y_only_points = condyle_points[y_only_mask]
+                if len(y_only_points) >= min_points:
+                    condyle_points = y_only_points
         
         return condyle_points
     
