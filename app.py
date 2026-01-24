@@ -188,6 +188,7 @@ def index():
                 analysis_id=analysis_id,
                 json_file=json_path.name,
                 stl_file=marked_path.name if marked_path.exists() else "",
+                upload_file=upload_path.name,
             )
         )
 
@@ -198,24 +199,36 @@ def index():
 def results():
     json_file = request.args.get("json_file")
     stl_file = request.args.get("stl_file")
+    upload_file = request.args.get("upload_file")
     analysis_id = request.args.get("analysis_id")
 
     if not json_file:
         return redirect(url_for("index"))
 
     payload = json.loads((OUTPUT_DIR / json_file).read_text(encoding="utf-8"))
+    view_file = stl_file or upload_file or ""
     return render_template(
         "results.html",
         analysis_id=analysis_id,
         payload=payload,
         json_file=json_file,
         stl_file=stl_file,
+        view_file=view_file,
     )
 
 
 @app.route("/download/<path:filename>")
 def download(filename: str):
     return send_from_directory(OUTPUT_DIR, filename, as_attachment=True)
+
+
+@app.route("/view/<path:filename>")
+def view_file(filename: str):
+    for base_dir in (OUTPUT_DIR, UPLOAD_DIR):
+        candidate = base_dir / filename
+        if candidate.exists():
+            return send_from_directory(base_dir, filename, as_attachment=False)
+    return ("Fichier introuvable", 404)
 
 
 if __name__ == "__main__":
