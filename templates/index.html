@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CondyleDetect SaaS</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+  </head>
+  <body>
+    <main class="container">
+      <header class="hero">
+        <h1>CondyleDetect</h1>
+        <p>Analyse SaaS des condyles mandibulaires à partir de fichiers STL.</p>
+      </header>
+
+      <section class="card">
+        <h2>Lancer une analyse</h2>
+        {% if error %}
+        <div class="alert">{{ error }}</div>
+        {% endif %}
+        <form method="post" enctype="multipart/form-data" class="form">
+          <label class="field">
+            <span>Fichier STL</span>
+            <input type="file" name="stl_file" accept=".stl" required />
+          </label>
+
+          <label class="field">
+            <span>Rayon de recherche (mm)</span>
+            <input type="number" name="search_radius" value="15" min="5" max="30" step="0.5" />
+          </label>
+
+          <button type="submit" class="btn-primary">Analyser</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <h2>Fonctionnement</h2>
+        <ul>
+          <li>Upload sécurisé d’un fichier STL.</li>
+          <li>Détection des condyles, calcul des points pivots et mesures.</li>
+          <li>Export JSON et STL annoté.</li>
+        </ul>
+      </section>
+    </main>
+  </body>
+</html>

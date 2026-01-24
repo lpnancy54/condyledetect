@@ -57,17 +57,47 @@ class CondyleDetector:
         if len(side_vertices) < 100:
             return None
         
-        # Point le plus haut de ce côté
-        max_z_idx = np.argmax(side_vertices[:, 2])
-        highest_point = side_vertices[max_z_idx]
+        # Point de départ supérieur et postérieur pour éviter l'apophyse coronoïde
+        z_threshold_seed = np.percentile(side_vertices[:, 2], 90)
+        superior_mask = side_vertices[:, 2] >= z_threshold_seed
+        superior_points = side_vertices[superior_mask]
+        if len(superior_points) == 0:
+            return None
+        posterior_idx = np.argmax(superior_points[:, 1])
+        highest_point = superior_points[posterior_idx]
         
         # Sphère de recherche
         distances = np.linalg.norm(side_vertices - highest_point, axis=1)
         condyle_mask = distances < self.search_radius
         condyle_points = side_vertices[condyle_mask]
         
-        # Ne pas filtrer pour garder tout le volume du condyle
-        # Cela permet de calculer le vrai centre géométrique 3D
+        # Affiner en favorisant les zones supérieures et surtout postérieures
+        # (plus haut et surtout plus en arrière que l'apophyse coronoïde).
+        if len(condyle_points) > 50:
+            threshold_pairs = [(55, 70), (50, 65), (45, 60)]
+            min_points = 20
+
+            refined_points = None
+
+            for z_pct, y_pct in threshold_pairs:
+                z_threshold = np.percentile(condyle_points[:, 2], z_pct)
+                y_threshold = np.percentile(condyle_points[:, 1], y_pct)
+
+                refined_mask = (condyle_points[:, 2] >= z_threshold) & (condyle_points[:, 1] >= y_threshold)
+                candidate = condyle_points[refined_mask]
+
+                if len(candidate) >= min_points:
+                    refined_points = candidate
+                    break
+
+            if refined_points is not None:
+                condyle_points = refined_points
+            else:
+                z_threshold = np.percentile(condyle_points[:, 2], 45)
+                z_only_mask = condyle_points[:, 2] >= z_threshold
+                z_only_points = condyle_points[z_only_mask]
+                if len(z_only_points) >= min_points:
+                    condyle_points = z_only_points
         
         return condyle_points
     
